@@ -4,28 +4,28 @@
 }:
 
 let
-  inherit (pkgs) lib;
-
   gccVersion = gccUnwrapped.version;
-
   gccPatched = pkgs.runCommand "gcc-${gccVersion}-pch"
     {
       outputs = [ "out" "lib" "libgcc" ];
-    }
-    ''
+    } ''
     set -euxo pipefail
-
-    cp -r ${gccUnwrapped} $out
+    cp -r ${gccUnwrapped}        $out
     cp -r ${gccUnwrapped.lib}    $lib
     cp -r ${gccUnwrapped.libgcc} $libgcc
-
+    pids=()
     function gchgen {
-      ${gccUnwrapped}/bin/g++ -x c++-header \
-        -mtls-dialect=gnu2 -std="$3" -fno-stack-limit \
-        -fdiagnostics-color=always -DONLINE_JUDGE \
-        -c "$1" -o "$1.gch/$2.gch" $4 &
+      ${gccUnwrapped}/bin/g++ -x c++-header -mtls-dialect=gnu2 -std="$3" -fno-stack-limit -fdiagnostics-color=always \
+        -DONLINE_JUDGE -c "$1" -o "$1.gch/$2.gch" ''${4:-} &
+      pids+=($!)
     }
-
+    function wait_all {
+      local p
+      for p in "''${pids[@]}"; do
+        wait "$p" || { echo "ERROR: background job $p failed" >&2; exit 1; }
+      done
+      pids=()
+    }
     function ensureSingleCache {
       echo "Creating cache for $1"
       cd "$(dirname "$1")"
@@ -41,7 +41,7 @@ let
       gchgen "$filename" 20   c++20
       gchgen "$filename" 23   c++23
       gchgen "$filename" 26   c++26
-      wait
+      wait_all
       gchgen "$filename" 98o2 c++98 -O2
       gchgen "$filename" 03o2 c++03 -O2
       gchgen "$filename" 11o2 c++11 -O2
@@ -50,13 +50,12 @@ let
       gchgen "$filename" 20o2 c++20 -O2
       gchgen "$filename" 23o2 c++23 -O2
       gchgen "$filename" 26o2 c++26 -O2
-      wait
+      wait_all
     }
-
     function ensureCache {
       local filename found
       filename=$(basename "$1")
-      found=$(find "$out" -name "$filename" -print -quit)
+      found=$(find "$out" -type f -name "$filename" -not -path '*/tr1/*' -print -quit)
       if [ -z "$found" ]; then
         echo "ERROR: '$1' not found under $out" >&2
         exit 1
@@ -64,11 +63,10 @@ let
       echo "Found: $found"
       ensureSingleCache "$found"
     }
-
     ensureCache bits/extc++.h
     ensureCache bits/stdc++.h
     ensureCache iostream
     ensureCache cstdio
-    '';
+  '';
 in
 pkgs.wrapCC gccPatched
